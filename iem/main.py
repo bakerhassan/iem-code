@@ -5,9 +5,10 @@ from torch.utils.data import DataLoader
 from metrics import *
 from models import *
 from datasets import *
+from shared import utils
+from texture_mnist import dataloader
 
 parser = argparse.ArgumentParser(description='Inpainting Error Maximization')
-parser.add_argument('data_path', type=str)
 parser.add_argument('--size', type=int, default=128)
 parser.add_argument('--split', type=str, default='test')
 parser.add_argument('--batch-size', type=int, default=1020)
@@ -17,7 +18,17 @@ parser.add_argument('--kernel-size', type=int, default=11)
 parser.add_argument('--reps', type=int, default=2)
 parser.add_argument('--lmbda', type=float, default=0.001)
 parser.add_argument('--scale-factor', type=int, default=1)
-parser.add_argument('--device',  type=str, default='cuda')
+parser.add_argument('--device',  type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+parser.add_argument('--shadow-px', type=int, default=0,
+                    help='Number of pixels that MNIST digit is shifted up to create shadow (default: 0)')
+parser.add_argument('--foreground-type', default="FashionMNIST",
+                    help='Foreground information: MNIST-V1, MNIST-V2, FashionMNIST (default:MNIST-V1)')
+parser.add_argument('--match-bg-fg', default=False, action='store_true',
+                    help='match (in terms of classes) the background in the foregrond images to their corresponding background images (default:False)')
+parser.add_argument('--fg-size', default=None, type=float,
+                    help='foreground image size (in percentage) on the background. It needs to be (0,1] if it is passed (default:None)')
+parser.add_argument('--root', default=os.getcwd(),
+                    help='Path to root (project) folder (default: current directory)')
 args = parser.parse_args()
 
 transform = transforms.Compose([
@@ -26,8 +37,10 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
-data = FlowersDataset(args.data_path, 'test', transform)
-loader = DataLoader(data, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+# data = FlowersDataset(args.data_path, 'test', transform)
+rng = utils.check_rng(13)
+loader, test_loader = dataloader.build(args, rng)
+# loader = DataLoader(train_loader, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
 # naive inpainting module that uses a Gaussian filter to predict values of masked out pixels
 inpainter = Inpainter(args.sigma, args.kernel_size, args.reps, args.scale_factor).to(args.device)
@@ -72,7 +85,7 @@ for batch_idx, (x, seg) in enumerate(loader):
             # smoothing procedure: we set a pixel to 1 if there are 4 or more 1-valued pixels in its 3x3 neighborhood
             mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
 
-            acc, iou, miou, dice = compute_performance(mask, seg)
+            acc, iou, miou, dice = compute_performance(1-mask, seg)
             print("\tIter {:>3}: InpError {:.3f} IoU {:.3f} DICE {:.3f}".format(i, inp_error.mean().item(), iou, dice))
 
 end_time = time.time()
