@@ -29,7 +29,7 @@ transform = transforms.Compose([
 # data = FlowersDataset(args.data_path, 'test', transform)
 data = torch.load('/lustre/cniel/onr/sss_masks_legacy.pt')
 fg_images, masks = data['images'].repeat(1, 3, 1, 1), data['masks']
-loader = DataLoader(TensorDataset([fg_images,masks]), batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+loader = DataLoader(TensorDataset(fg_images,masks), batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
 # naive inpainting module that uses a Gaussian filter to predict values of masked out pixels
 inpainter = Inpainter(args.sigma, args.kernel_size, args.reps, args.scale_factor).to(args.device)
