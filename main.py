@@ -7,7 +7,7 @@ from models import *
 from datasets import *
 
 parser = argparse.ArgumentParser(description='Inpainting Error Maximization')
-parser.add_argument('data_path', type=str, default='none')
+parser.add_argument('data_path', type=str, default='/lustre/cniel/data/AI4Shipwrecks')
 parser.add_argument('--size', type=int, default=64)
 parser.add_argument('--split', type=str, default='test')
 parser.add_argument('--batch-size', type=int, default=1020)
@@ -25,57 +25,157 @@ transform = transforms.Compose([
     transforms.CenterCrop(args.size),
     transforms.ToTensor()
 ])
+import os
+import time
+import numpy as np
+from PIL import Image
+import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
-# data = FlowersDataset(args.data_path, 'test', transform)
-data = torch.load('/lustre/cniel/onr/sss_masks_legacy.pt')
-fg_images, masks = data['images'].repeat(1, 3, 1, 1), data['masks']
-loader = DataLoader(TensorDataset(fg_images,masks), batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+# ------------------ Dataset ------------------
 
-# naive inpainting module that uses a Gaussian filter to predict values of masked out pixels
+class SonarDataset(Dataset):
+    def __init__(self, image_paths, label_paths):
+        self.image_paths = image_paths
+        self.label_paths = label_paths
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        image = np.array(Image.open(self.image_paths[idx])).astype(np.float32)
+        label = np.array(Image.open(self.label_paths[idx])).astype(np.float32)
+
+        p98 = np.percentile(image, 98)
+        image = np.clip(image / p98, 0, 1)
+
+        image = torch.from_numpy(image).unsqueeze(0)  # [1, H, W]
+        label = torch.from_numpy(label).unsqueeze(0)  # [1, H, W]
+        return image, label
+
+# ------------------ Data Paths ------------------
+
+train_dir = os.path.join(data_dir, "train")
+test_dir = os.path.join(data_dir, "test")
+
+train_images = sorted([os.path.join(train_dir, "images", f) for f in os.listdir(os.path.join(train_dir, "images"))])
+train_labels = sorted([os.path.join(train_dir, "labels", f) for f in os.listdir(os.path.join(train_dir, "labels"))])
+
+test_images = sorted([os.path.join(test_dir, "images", f) for f in os.listdir(os.path.join(test_dir, "images"))])
+test_labels = sorted([os.path.join(test_dir, "labels", f) for f in os.listdir(os.path.join(test_dir, "labels"))])
+
+train_loader = DataLoader(SonarDataset(train_images, train_labels), batch_size=args.batch_size, shuffle=True)
+test_loader = DataLoader(SonarDataset(test_images, test_labels), batch_size=1, shuffle=False)
+
+# ------------------ Modules ------------------
+
 inpainter = Inpainter(args.sigma, args.kernel_size, args.reps, args.scale_factor).to(args.device)
-# module that gets mask as input and returns its boundary, used to restrict updates only to boundary pixels
 boundary = Boundary().to(args.device)
 
+# ------------------ Training Loop ------------------
+
 start_time = time.time()
-for batch_idx, (x, seg) in enumerate(loader):
-    print(len(x))
-    print("Batch {}/{}".format(batch_idx+1, len(loader)))
+for batch_idx, (x, seg) in enumerate(train_loader):
+    print("Training Batch {}/{}".format(batch_idx + 1, len(train_loader)))
     x, seg = x.to(args.device), seg.to(args.device)
 
-    # initializes a mask for each sample in the mini batch as a centered square
-    mask = torch.nn.Parameter(torch.zeros(len(x), 1, args.size, args.size).to(args.device))
-    init_start, init_end = args.size//5, args.size - args.size//5
-    mask.data[:,:,init_start:init_end,init_start:init_end].fill_(1.0)
+    B, _, H, W = x.shape
+
+    mask = torch.nn.Parameter(torch.zeros(B, 1, H, W).to(args.device))
+    init_start1, init_end1 = H // 5, H - H // 5
+    init_start2, init_end2 = W // 5, W - W // 5
+
+    mask.data[:, :, init_start1:init_end1, init_start2:init_end2].fill_(1.0)
 
     for i in range(args.iters):
         foreground = x * mask
-        background = x * (1-mask)
+        background = x * (1 - mask)
 
-        pred_foreground = inpainter(background, (1-mask))
+        pred_foreground = inpainter(background, (1 - mask))
         pred_background = inpainter(foreground, mask)
 
-        # inpainting error is equiv to negative coeff. of constraint between foreground and background
         inp_error = neg_coeff_constraint(x, mask, pred_foreground, pred_background)
-        # diversity term is the total deviation of foreground and background pixels
         mask_diversity = diversity(x, mask, foreground, background)
 
-        # regularized IEM objective (to be maximized) is the inpainting error minus diversity regularizer
         total_loss = inp_error - args.lmbda * mask_diversity
         total_loss.sum().backward()
 
         with torch.no_grad():
             grad = mask.grad.data
-            # we only update mask pixels that are in the boundary AND have non-zero gradient
             update_bool = boundary(mask) * (grad != 0)
-            # pixels with positive gradients are set to 1 and with negative gradients are set to 0
             mask.data[update_bool] = (grad[update_bool] > 0).float()
             grad.zero_()
-            
-            # smoothing procedure: we set a pixel to 1 if there are 4 or more 1-valued pixels in its 3x3 neighborhood
+            mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
+
+end_time = time.time()
+print(f"Training completed in {end_time - start_time:.1f} seconds")
+
+# ------------------ Testing Loop with Visualization ------------------
+
+os.makedirs("iem_outputs", exist_ok=True)
+
+start_time = time.time()
+for batch_idx, (x, seg) in enumerate(test_loader):
+    print("Testing Batch {}/{}".format(batch_idx + 1, len(test_loader)))
+    x, seg = x.to(args.device), seg.to(args.device)
+
+    _, _, H, W = x.shape
+
+    mask = torch.nn.Parameter(torch.zeros(1, 1, H, W).to(args.device))
+    init_start1, init_end1 = H // 5, H - H // 5
+    init_start2, init_end2 = W // 5, W - W // 5
+    mask.data[:, :, init_start1:init_end1, init_start2:init_end2].fill_(1.0)
+
+    for i in range(args.iters):
+        foreground = x * mask
+        background = x * (1 - mask)
+
+        pred_foreground = inpainter(background, (1 - mask))
+        pred_background = inpainter(foreground, mask)
+
+        inp_error = neg_coeff_constraint(x, mask, pred_foreground, pred_background)
+        mask_diversity = diversity(x, mask, foreground, background)
+
+        total_loss = inp_error - args.lmbda * mask_diversity
+        total_loss.sum().backward()
+
+        with torch.no_grad():
+            grad = mask.grad.data
+            update_bool = boundary(mask) * (grad != 0)
+            mask.data[update_bool] = (grad[update_bool] > 0).float()
+            grad.zero_()
             mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
 
             acc, iou, miou, dice = compute_performance(mask, seg)
-            print("\tIter {:>3}: InpError {:.3f} IoU {:.3f} DICE {:.3f}".format(i, inp_error.mean().item(), iou, dice))
+            print(f"\tIter {i:>3}: InpError {inp_error.mean():.3f} IoU {iou:.3f} DICE {dice:.3f}")
+
+    # ------------------ Save Composite Image ------------------
+
+    input_img = x[0, 0].cpu().numpy()
+    true_mask = seg[0, 0].cpu().numpy()
+    est_mask = mask[0, 0].cpu().numpy()
+    est_thresh = (est_mask >= 0.5).astype(np.float32)
+
+    p98 = np.percentile(input_img, 98)
+    norm_input = np.clip(input_img / p98, 0, 1)
+    input_colored = cm.get_cmap('BuPu_r')(norm_input)[:, :, :3]
+    input_colored = (input_colored * 255).astype(np.uint8)
+
+    def to_rgb(mask):
+        return (np.stack([mask] * 3, axis=-1) * 255).astype(np.uint8)
+
+    composite = np.concatenate([
+        input_colored,
+        to_rgb(true_mask),
+        to_rgb(est_mask),
+        to_rgb(est_thresh)
+    ], axis=1)
+
+    save_path = os.path.join("iem_outputs", f"test_{batch_idx}.png")
+    Image.fromarray(composite).save(save_path)
 
 end_time = time.time()
-print("IEM finished in {:.1f} seconds".format(end_time-start_time))
+print(f"Testing completed in {end_time - start_time:.1f} seconds")
