@@ -58,8 +58,8 @@ class SonarDataset(Dataset):
 
 # ------------------ Data Paths ------------------
 
-train_dir = os.path.join(data_path, "train")
-test_dir = os.path.join(data_path, "test")
+train_dir = os.path.join(args.data_path, "train")
+test_dir = os.path.join(args.data_path, "test")
 
 train_images = sorted([os.path.join(train_dir, "images", f) for f in os.listdir(os.path.join(train_dir, "images"))])
 train_labels = sorted([os.path.join(train_dir, "labels", f) for f in os.listdir(os.path.join(train_dir, "labels"))])
