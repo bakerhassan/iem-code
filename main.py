@@ -126,7 +126,8 @@ os.makedirs("iem_outputs", exist_ok=True)
 
 mean_ioc = {}
 start_time = time.time()
-for batch_idx, (x, seg, filename) in enumerate(test_loader):
+for batch_idx, batch in enumerate(test_loader):
+    x, seg, filename = batch[0]
     print("Testing Batch {}/{}".format(batch_idx + 1, len(test_loader)))
     x, seg = x.to(args.device), seg.to(args.device)
 
