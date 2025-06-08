@@ -1,14 +1,14 @@
 import torch, argparse, time
 import torch.nn.functional as F
 from torchvision import transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader,TensorDataset
 from metrics import *
 from models import *
 from datasets import *
 
 parser = argparse.ArgumentParser(description='Inpainting Error Maximization')
 parser.add_argument('data_path', type=str)
-parser.add_argument('--size', type=int, default=128)
+parser.add_argument('--size', type=int, default=64)
 parser.add_argument('--split', type=str, default='test')
 parser.add_argument('--batch-size', type=int, default=1020)
 parser.add_argument('--iters', type=int, default=150)
@@ -26,8 +26,10 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
-data = FlowersDataset(args.data_path, 'test', transform)
-loader = DataLoader(data, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+# data = FlowersDataset(args.data_path, 'test', transform)
+data = torch.load('/lustre/cniel/onr/sss_masks_legacy.pt')
+fg_images, masks = data['images'].repeat(1, 3, 1, 1), data['masks']
+loader = DataLoader(TensorDataset([fg_images,masks]), batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
 # naive inpainting module that uses a Gaussian filter to predict values of masked out pixels
 inpainter = Inpainter(args.sigma, args.kernel_size, args.reps, args.scale_factor).to(args.device)
