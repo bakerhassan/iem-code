@@ -157,7 +157,8 @@ for batch_idx, batch in enumerate(test_loader):
             update_bool = boundary(mask) * (grad != 0)
             mask.data[update_bool] = (grad[update_bool] > 0).float()
             grad.zero_()
-            mask.data = (F.avg_pool2d(mask, 1, 1, 1, divisor_override=1) >= 4).float()
+            mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
+
 
     # ------------------ Save Composite Image ------------------
 
