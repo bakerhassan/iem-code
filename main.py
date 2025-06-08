@@ -164,7 +164,7 @@ for batch_idx, batch in enumerate(test_loader):
 
     input_img = x[0, 0].cpu().numpy()
     true_mask = seg[0, 0].cpu().numpy()
-    est_mask = mask[0, 0].cpu().numpy()
+    est_mask = mask[0, 0].detach().cpu().numpy()
     est_thresh = (est_mask >= 0.5).astype(np.float32)
 
     p98 = np.percentile(input_img, 98)
