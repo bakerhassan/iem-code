@@ -12,7 +12,7 @@ class Inpainter(nn.Module):
         self.upsample = nn.Upsample(scale_factor=scale_factor, mode='nearest') if scale_factor > 1 else nn.Identity()
         squared_dists = torch.linspace(-(kernel_size-1)/2, (kernel_size-1)/2, kernel_size)**2
         gaussian_kernel = torch.exp(-0.5 * squared_dists / sigma**2)
-        gaussian_kernel = (gaussian_kernel / gaussian_kernel.sum()).view(1, 1, kernel_size).repeat(4,1,1)
+        gaussian_kernel = (gaussian_kernel / gaussian_kernel.sum()).view(1, 1, kernel_size).repeat(2,1,1)
         self.register_buffer('gaussian_kernel', gaussian_kernel)
 
     def gaussian_filter(self, x):
