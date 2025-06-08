@@ -48,13 +48,15 @@ class SonarDataset(Dataset):
     def __getitem__(self, idx):
         image = np.array(Image.open(self.image_paths[idx])).astype(np.float32)
         label = np.array(Image.open(self.label_paths[idx])).astype(np.float32)
-
+        print(image.min(),image.max())
         p98 = np.percentile(image, 98)
         image = np.clip(image / p98, 0, 1)
 
         image = torch.from_numpy(image).unsqueeze(0)  # [1, H, W]
         label = torch.from_numpy(label).unsqueeze(0)  # [1, H, W]
-        return image, label
+
+        file_name = self.image_paths[idx].split('/')[-1]
+        return image, label, file_name
 
 # ------------------ Data Paths ------------------
 
@@ -71,7 +73,7 @@ train_labels = sorted([os.path.join(train_dir, "labels", f) for f in os.listdir(
 test_images = sorted([os.path.join(test_dir, "images", f) for f in os.listdir(os.path.join(test_dir, "images"))])
 test_labels = sorted([os.path.join(test_dir, "labels", f) for f in os.listdir(os.path.join(test_dir, "labels"))])
 
-train_loader = DataLoader(SonarDataset(train_images, train_labels), batch_size=args.batch_size, shuffle=True,collate_fn=variable_size_collate_fn)
+train_loader = DataLoader(SonarDataset(train_images, train_labels), batch_size=args.batch_size, shuffle=False,collate_fn=variable_size_collate_fn)
 test_loader = DataLoader(SonarDataset(test_images, test_labels), batch_size=1, shuffle=False,collate_fn=variable_size_collate_fn)
 
 # ------------------ Modules ------------------
@@ -81,48 +83,50 @@ boundary = Boundary().to(args.device)
 
 # ------------------ Training Loop ------------------
 
-start_time = time.time()
-for batch_idx, (x, seg) in enumerate(train_loader):
-    print("Training Batch {}/{}".format(batch_idx + 1, len(train_loader)))
-    x, seg = x.to(args.device), seg.to(args.device)
-
-    B, _, H, W = x.shape
-
-    mask = torch.nn.Parameter(torch.zeros(B, 1, H, W).to(args.device))
-    init_start1, init_end1 = H // 5, H - H // 5
-    init_start2, init_end2 = W // 5, W - W // 5
-
-    mask.data[:, :, init_start1:init_end1, init_start2:init_end2].fill_(1.0)
-
-    for i in range(args.iters):
-        foreground = x * mask
-        background = x * (1 - mask)
-
-        pred_foreground = inpainter(background, (1 - mask))
-        pred_background = inpainter(foreground, mask)
-
-        inp_error = neg_coeff_constraint(x, mask, pred_foreground, pred_background)
-        mask_diversity = diversity(x, mask, foreground, background)
-
-        total_loss = inp_error - args.lmbda * mask_diversity
-        total_loss.sum().backward()
-
-        with torch.no_grad():
-            grad = mask.grad.data
-            update_bool = boundary(mask) * (grad != 0)
-            mask.data[update_bool] = (grad[update_bool] > 0).float()
-            grad.zero_()
-            mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
-
-end_time = time.time()
-print(f"Training completed in {end_time - start_time:.1f} seconds")
+# start_time = time.time()
+# mean_ioc = {}
+# for batch_idx, (x, seg, file_name) in enumerate(train_loader):
+#     print("Training Batch {}/{}".format(batch_idx + 1, len(train_loader)))
+#     x, seg = x.to(args.device), seg.to(args.device)
+#
+#     B, _, H, W = x.shape
+#
+#     mask = torch.nn.Parameter(torch.zeros(B, 1, H, W).to(args.device))
+#     init_start1, init_end1 = H // 5, H - H // 5
+#     init_start2, init_end2 = W // 5, W - W // 5
+#
+#     mask.data[:, :, init_start1:init_end1, init_start2:init_end2].fill_(1.0)
+#
+#     for i in range(args.iters):
+#         foreground = x * mask
+#         background = x * (1 - mask)
+#
+#         pred_foreground = inpainter(background, (1 - mask))
+#         pred_background = inpainter(foreground, mask)
+#
+#         inp_error = neg_coeff_constraint(x, mask, pred_foreground, pred_background)
+#         mask_diversity = diversity(x, mask, foreground, background)
+#
+#         total_loss = inp_error - args.lmbda * mask_diversity
+#         total_loss.sum().backward()
+#
+#         with torch.no_grad():
+#             grad = mask.grad.data
+#             update_bool = boundary(mask) * (grad != 0)
+#             mask.data[update_bool] = (grad[update_bool] > 0).float()
+#             grad.zero_()
+#             mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
+#
+# end_time = time.time()
+# print(f"Training completed in {end_time - start_time:.1f} seconds")
 
 # ------------------ Testing Loop with Visualization ------------------
 
 os.makedirs("iem_outputs", exist_ok=True)
 
+mean_ioc = {}
 start_time = time.time()
-for batch_idx, (x, seg) in enumerate(test_loader):
+for batch_idx, (x, seg, filename) in enumerate(test_loader):
     print("Testing Batch {}/{}".format(batch_idx + 1, len(test_loader)))
     x, seg = x.to(args.device), seg.to(args.device)
 
@@ -153,9 +157,6 @@ for batch_idx, (x, seg) in enumerate(test_loader):
             grad.zero_()
             mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
 
-            acc, iou, miou, dice = compute_performance(mask, seg)
-            print(f"\tIter {i:>3}: InpError {inp_error.mean():.3f} IoU {iou:.3f} DICE {dice:.3f}")
-
     # ------------------ Save Composite Image ------------------
 
     input_img = x[0, 0].cpu().numpy()
@@ -180,6 +181,18 @@ for batch_idx, (x, seg) in enumerate(test_loader):
 
     save_path = os.path.join("iem_outputs", f"test_{batch_idx}.png")
     Image.fromarray(composite).save(save_path)
+
+    acc, iou, miou, dice = compute_performance(mask, seg)
+
+    mean_ioc[filename] = iou
+    print(f"InpError {inp_error.mean():.3f} IoU {iou:.3f} DICE {dice:.3f}")
+
+
+
+import json
+
+with open("mean_iou.json", "w") as f:
+    json.dump(mean_ioc, f, indent=4)
 
 end_time = time.time()
 print(f"Testing completed in {end_time - start_time:.1f} seconds")
