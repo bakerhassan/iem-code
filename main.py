@@ -58,6 +58,10 @@ class SonarDataset(Dataset):
 
 # ------------------ Data Paths ------------------
 
+def variable_size_collate_fn(batch):
+    # batch is a list of (image, label) tuples
+    return batch  # just return the list directly
+
 train_dir = os.path.join(args.data_path, "train")
 test_dir = os.path.join(args.data_path, "test")
 
@@ -67,8 +71,8 @@ train_labels = sorted([os.path.join(train_dir, "labels", f) for f in os.listdir(
 test_images = sorted([os.path.join(test_dir, "images", f) for f in os.listdir(os.path.join(test_dir, "images"))])
 test_labels = sorted([os.path.join(test_dir, "labels", f) for f in os.listdir(os.path.join(test_dir, "labels"))])
 
-train_loader = DataLoader(SonarDataset(train_images, train_labels), batch_size=args.batch_size, shuffle=True)
-test_loader = DataLoader(SonarDataset(test_images, test_labels), batch_size=1, shuffle=False)
+train_loader = DataLoader(SonarDataset(train_images, train_labels), batch_size=args.batch_size, shuffle=True,collate_fn=variable_size_collate_fn)
+test_loader = DataLoader(SonarDataset(test_images, test_labels), batch_size=1, shuffle=False,collate_fn=variable_size_collate_fn)
 
 # ------------------ Modules ------------------
 
