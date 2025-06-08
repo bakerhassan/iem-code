@@ -7,7 +7,7 @@ from models import *
 from datasets import *
 
 parser = argparse.ArgumentParser(description='Inpainting Error Maximization')
-parser.add_argument('data_path', type=str)
+parser.add_argument('data_path', type=str, default='none')
 parser.add_argument('--size', type=int, default=64)
 parser.add_argument('--split', type=str, default='test')
 parser.add_argument('--batch-size', type=int, default=1020)
