@@ -131,7 +131,7 @@ for batch_idx, batch in enumerate(test_loader):
     print("Testing Batch {}/{}".format(batch_idx + 1, len(test_loader)))
     x, seg = x.to(args.device), seg.to(args.device)
 
-    _, _, H, W = x.shape
+    _, H, W = x.shape
 
     mask = torch.nn.Parameter(torch.zeros(1, 1, H, W).to(args.device))
     init_start1, init_end1 = H // 5, H - H // 5
