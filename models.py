@@ -17,8 +17,8 @@ class Inpainter(nn.Module):
 
     def gaussian_filter(self, x):
         # due to separability we can apply two 1d gaussian filters to get some speedup
-        v = F.conv2d(x, self.gaussian_kernel.unsqueeze(3), padding=(self.padding,0), groups=4)
-        h = F.conv2d(v, self.gaussian_kernel.unsqueeze(2), padding=(0,self.padding), groups=4)
+        v = F.conv2d(x, self.gaussian_kernel.unsqueeze(3), padding=(self.padding,0), groups=2)
+        h = F.conv2d(v, self.gaussian_kernel.unsqueeze(2), padding=(0,self.padding), groups=2)
         return h
 
     def forward(self, x, m):
