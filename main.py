@@ -175,14 +175,14 @@ for batch_idx, batch in enumerate(test_loader):
             mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
 
     # Stitch patches back together using fold and averaging
-    mask_flat = mask.view(B, -1).unsqueeze(0)  # [1, B*128*128]
+    mask_flat = mask.view(B, -1).permute(1, 0).unsqueeze(0)  # [1, patch_area, B]
     full_mask_sum = F.fold(mask_flat, output_size=(H, W), kernel_size=patch_size, stride=stride)
 
     ones = torch.ones_like(mask)
-    ones_flat = ones.view(B, -1).unsqueeze(0)
+    ones_flat = ones.view(B, -1).permute(1, 0).unsqueeze(0)
     count_map = F.fold(ones_flat, output_size=(H, W), kernel_size=patch_size, stride=stride)
 
-    full_mask = full_mask_sum / (count_map + 1e-6)  # Avoid div by zero
+    full_mask = full_mask_sum / (count_map + 1e-6)
 
     # ------------------ Save Composite Image ------------------
 
