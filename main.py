@@ -121,33 +121,48 @@ boundary = Boundary().to(args.device)
 # print(f"Training completed in {end_time - start_time:.1f} seconds")
 
 # ------------------ Testing Loop with Visualization ------------------
+import torch.nn.functional as F
+
+patch_size = 128
+stride = patch_size // 2  # 50% overlap
 
 os.makedirs("iem_outputs", exist_ok=True)
-
 mean_ioc = {}
 start_time = time.time()
+
 for batch_idx, batch in enumerate(test_loader):
     x, seg, filename = batch[0]
-    print("Testing Batch {}/{}".format(batch_idx + 1, len(test_loader)))
+    print(f"Testing Batch {batch_idx + 1}/{len(test_loader)}")
     x, seg = x.to(args.device), seg.to(args.device)
-    x = x.unsqueeze(0)
-    seg = seg.unsqueeze(0)
-    _, _, H, W = x.shape
 
-    mask = torch.nn.Parameter(torch.zeros(1, 1, H, W).to(args.device))
-    init_start1, init_end1 = H // 5, H - H // 5
-    init_start2, init_end2 = W // 5, W - W // 5
-    mask.data[:, :, init_start1:init_end1, init_start2:init_end2].fill_(1.0)
+    _, H, W = x.shape
+    x = x.unsqueeze(0)  # [1, 1, H, W]
+    seg = seg.unsqueeze(0)
+
+    # Extract overlapping patches from input and label
+    x_patches = F.unfold(x, kernel_size=patch_size, stride=stride)  # [1, patch_area * 1, num_patches]
+    seg_patches = F.unfold(seg, kernel_size=patch_size, stride=stride)
+
+    num_patches = x_patches.shape[-1]
+    B = num_patches
+    x_patches = x_patches.permute(0, 2, 1).reshape(B, 1, patch_size, patch_size)
+    seg_patches = seg_patches.permute(0, 2, 1).reshape(B, 1, patch_size, patch_size)
+
+    # Prepare mask tensor for all patches
+    mask = torch.nn.Parameter(torch.zeros(B, 1, patch_size, patch_size).to(args.device))
+    init_start = patch_size // 5
+    init_end = patch_size - patch_size // 5
+    mask.data[:, :, init_start:init_end, init_start:init_end].fill_(1.0)
 
     for i in range(args.iters):
-        foreground = x * mask
-        background = x * (1 - mask)
+        foreground = x_patches * mask
+        background = x_patches * (1 - mask)
 
         pred_foreground = inpainter(background, (1 - mask))
         pred_background = inpainter(foreground, mask)
 
-        inp_error = neg_coeff_constraint(x, mask, pred_foreground, pred_background)
-        mask_diversity = diversity(x, mask, foreground, background)
+        inp_error = neg_coeff_constraint(x_patches, mask, pred_foreground, pred_background)
+        mask_diversity = diversity(x_patches, mask, foreground, background)
 
         total_loss = inp_error - args.lmbda * mask_diversity
         total_loss.sum().backward()
@@ -159,12 +174,21 @@ for batch_idx, batch in enumerate(test_loader):
             grad.zero_()
             mask.data = (F.avg_pool2d(mask, 3, 1, 1, divisor_override=1) >= 4).float()
 
+    # Stitch patches back together using fold and averaging
+    mask_flat = mask.view(B, -1).unsqueeze(0)  # [1, B*128*128]
+    full_mask_sum = F.fold(mask_flat, output_size=(H, W), kernel_size=patch_size, stride=stride)
+
+    ones = torch.ones_like(mask)
+    ones_flat = ones.view(B, -1).unsqueeze(0)
+    count_map = F.fold(ones_flat, output_size=(H, W), kernel_size=patch_size, stride=stride)
+
+    full_mask = full_mask_sum / (count_map + 1e-6)  # Avoid div by zero
 
     # ------------------ Save Composite Image ------------------
 
     input_img = x[0, 0].cpu().numpy()
     true_mask = seg[0, 0].cpu().numpy()
-    est_mask = mask[0, 0].detach().cpu().numpy()
+    est_mask = full_mask[0, 0].detach().cpu().numpy()
     est_thresh = (est_mask >= 0.5).astype(np.float32)
 
     p98 = np.percentile(input_img, 98)
@@ -185,17 +209,9 @@ for batch_idx, batch in enumerate(test_loader):
     save_path = os.path.join("iem_outputs", f"test_{batch_idx}.png")
     Image.fromarray(composite).save(save_path)
 
-    acc, iou, miou, dice = compute_performance(mask, seg)
-
+    acc, iou, miou, dice = compute_performance(full_mask, seg)
     mean_ioc[filename] = iou
     print(f"InpError {inp_error.mean():.3f} IoU {iou:.3f} DICE {dice:.3f}")
-
-
-
-import json
-
-with open("mean_iou.json", "w") as f:
-    json.dump(mean_ioc, f, indent=4)
 
 end_time = time.time()
 print(f"Testing completed in {end_time - start_time:.1f} seconds")
